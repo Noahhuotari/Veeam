@@ -12,51 +12,45 @@
  
 #>
 
+# Load Plugin and module
+Add-PSSnapin VeeamPSSnapin
+Import-Module VMware.VimAutomation.Core
 
-# Start of Settings
-# List of VM to exclude (by name) separated by a comma i.e: @("vm1","vm2")
-$excludevms=@()
-# Number of days to check, if a VM is not backed up within this interval it will be considered as not backed up         
-$DaysToCheck= 7
-# End of Settings
+# Configure for multiple vCenter Connections
+Set-PowerCLIConfiguration -DefaultVIServerMode Multiple -Scope Session -Confirm:$false
+Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Scope Session -Confirm:$false
 
-#Don't change below here!
-#Try to load VEEAM snapin, otherwise stop the process
-asnp "VeeamPSSnapIn" -ErrorAction Stop 
+# Connect to local B&R Server
+Connect-VBRServer -Server localhost
 
-# Build hash table with excluded VMs
-$excludedvms=@{}
-foreach ($vm in $excludevms) {
-    $excludedvms.Add($vm, "Excluded")
+# Read Credential-File
+$WorkingDir = "C:\hbs\veeam_script\"
+$CredObject = Import-Clixml -Path ($WorkingDir + "CredObject.xml")
+
+# Connect to vCenter servers, added to B&R server
+Get-VBRServer -Type VC | ForEach-Object {
+    Connect-VIServer $_.name -Credential $CredObject -ErrorAction Continue
 }
 
-# Get a list of all VMs from vCenter and add to hash table, assume Unprotected
-$Result=@()
-foreach ($vm in ($FullVM | Where { $_.Runtime.PowerState -eq "poweredOn" } | ForEach-Object {$_ | Select-object @{Name="VMname";Expression={$_.Name}}}))  {
-   if (!$excludedvms.ContainsKey($vm.VMname)) {
-        $vm | Add-Member -MemberType NoteProperty -Name "backed_up" -Value $False 
-        $Result += $vm
+# Read VMs in blocklist
+$Blocklist = Get-Content -path ($WorkingDir + "Blocklist.txt") -ErrorAction SilentlyContinue | Foreach {$_.TrimEnd()} 
+
+# Read all VMs
+$VMs = Get-VM | select Name, MemoryGB, PowerState, VMHost, Folder
+
+# Query Veeam Restore Points
+$result = @()
+$VbrRestore = Get-VBRBackup | Where-Object {$_.jobtype -eq "Backup"} | ForEach-Object {$Jobname = $_.jobname; Write-Output $_;} | Get-VBRRestorePoint | Select-Object vmname, @{n="Jobname"; e={$Jobname}} |Group-Object vmname
+$VbrRestore = $VbrRestore | ForEach-Object {$_.Group | Select-Object -first 1}
+
+# Check, if VM on blocklist and a restore point exists
+$VMs | ForEach-Object {
+    if (($_.name -notin $Blocklist) -and ($_.name -notin $VbrRestore.vmname)) {
+        $result += $_
     }
 }
+$result  | ft -AutoSize
 
-# Find all backup job sessions that have ended in the last week
-$vbrsessions = Get-VBRBackupSession | Where-Object {$_.JobType -eq "Backup" -or $_.JobType -eq "Replica" -and $_.EndTime -ge (Get-Date).adddays(-$DaysToCheck)}
-
-# Find all successfully backed up VMs in selected sessions (i.e. VMs not ending in failure) and update status to "Protected"
-foreach ($session in $vbrsessions) {
-    foreach ($vm in ($session.gettasksessions() | Where-Object {$_.Status -ne "Failed"} | ForEach-Object { $_ | Select-object @{Name="VMname";Expression={$_.Name}}})) {
-		$VMObj = $Result | where {$_.VMName -eq $vm.VMname }
-		if ($VMObj){
-			$VMObj.backed_up = $true
-		}
-    }
-}
-
-$Result | where {$_.backed_up -eq $false}
-$Title = "Running VMs that were not backed up in the last $DaysToCheck day(s)"
-$Header =  "Running VMs that were not backed up in the last $DaysToCheck day(s)"
-$Comments = "The following VMs were not backed up in the last $DaysToCheck day(s). They are probably not in a backup job or were in a failure state"
-$Display = "Table"
-$Author = "Geoffroi Genot"
-$PluginVersion = 1.0
-$PluginCategory = "VEEAM"
+# Close connections
+Disconnect-VIServer * -Confirm:$false
+Disconnect-VBRServer 
