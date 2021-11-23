@@ -1,0 +1,3 @@
+$VeeamPath = “C:\Program Files\Veeam\Backup and Replication\Console”
+$env:PSPath = $env:PSPath + “$([System.IO.Path]::PathSeparator)$VeeamPath”
+Import-Module -DisableNameChecking Veeam.Backup.PowerShell
