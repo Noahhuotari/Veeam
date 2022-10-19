@@ -1,4 +1,5 @@
-$Computers = Get-Content C:\temp\server-names.txt
+#$Computers = Get-Content C:\temp\server-names.txt
+$computers = "CWPMW-FS1"
 $Output = @()
 
 Foreach ($Computer in $Computers)
@@ -16,4 +17,4 @@ Foreach ($Computer in $Computers)
     }
 
 #$Output #| Export-Csv -NoTypeInformation -Path C:\temp\Space.csv
-$Output | select UsedSpace_GB
+$Output | select UsedSpace_GB | measure-object -sum UsedSpace_GB
